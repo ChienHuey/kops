@@ -605,6 +605,51 @@ var MachineTypes []AWSMachineTypeInfo = []AWSMachineTypeInfo{
 		EphemeralDisks: []int{320, 320},
 	},
 
+	// x1e family
+
+	{
+		Name:           "x1e.xlarge",
+		MemoryGB:       4,
+		ECU:            12,
+		Cores:          122,
+		EphemeralDisks: []int{120},
+	},
+	{
+		Name:           "x1e.2xlarge",
+		MemoryGB:       8,
+		ECU:            23,
+		Cores:          244,
+		EphemeralDisks: []int{240},
+	},
+	{
+		Name:           "x1e.4xlarge",
+		MemoryGB:       16,
+		ECU:            47,
+		Cores:          488,
+		EphemeralDisks: []int{480},
+	},
+	{
+		Name:           "x1e.8xlarge",
+		MemoryGB:       32,
+		ECU:            91,
+		Cores:          976,
+		EphemeralDisks: []int{960},
+	},
+	{
+		Name:           "x1e.16xlarge",
+		MemoryGB:       64,
+		ECU:            179,
+		Cores:          1952,
+		EphemeralDisks: []int{1920},
+	},
+	{
+		Name:           "x1e.32xlarge",
+		MemoryGB:       128,
+		ECU:            340,
+		Cores:          3904,
+		EphemeralDisks: []int{3904},
+	},
+
 	// x1 family
 	{
 		Name:           "x1.16xlarge",
