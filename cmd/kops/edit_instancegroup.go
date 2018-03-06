@@ -19,37 +19,39 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
-	"io"
-
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kops/cmd/kops/util"
 	api "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/validation"
+	"k8s.io/kops/pkg/assets"
+	"k8s.io/kops/pkg/kopscodecs"
 	"k8s.io/kops/upup/pkg/fi/cloudup"
 	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
 	"k8s.io/kubernetes/pkg/kubectl/cmd/util/editor"
-	"k8s.io/kubernetes/pkg/util/i18n"
+	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
 )
 
 var (
-	edit_instancegroup_long = templates.LongDesc(i18n.T(`Edit a cluster configuration.
+	editInstancegroupLong = templates.LongDesc(i18n.T(`Edit a cluster configuration.
 
-	This command changes the instancegroup cloud specification in the registry.
+	This command changes the instancegroup desired configuration in the registry.
 
     	To set your preferred editor, you can define the EDITOR environment variable.
     	When you have done this, kops will use the editor that you have set.
 
 	kops edit does not update the cloud resources, to apply the changes use "kops update cluster".`))
 
-	edit_instancegroup_example = templates.Examples(i18n.T(`
-	# Edit a instancegroup configuration.
+	editInstancegroupExample = templates.Examples(i18n.T(`
+	# Edit an instancegroup desired configuration.
 	kops edit ig --name k8s-cluster.example.com node --state=s3://kops-state-1234
 	`))
 
-	edit_instancegroup_short = i18n.T(`Edit instancegroup.`)
+	editInstancegroupShort = i18n.T(`Edit instancegroup.`)
 )
 
 type EditInstanceGroupOptions struct {
@@ -61,9 +63,9 @@ func NewCmdEditInstanceGroup(f *util.Factory, out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "instancegroup",
 		Aliases: []string{"instancegroups", "ig"},
-		Short:   edit_instancegroup_short,
-		Long:    edit_instancegroup_long,
-		Example: edit_instancegroup_example,
+		Short:   editInstancegroupShort,
+		Long:    editInstancegroupLong,
+		Example: editInstancegroupExample,
 		Run: func(cmd *cobra.Command, args []string) {
 
 			err := RunEditInstanceGroup(f, cmd, args, os.Stdout, options)
@@ -105,7 +107,7 @@ func RunEditInstanceGroup(f *util.Factory, cmd *cobra.Command, args []string, ou
 		return fmt.Errorf("name is required")
 	}
 
-	oldGroup, err := clientset.InstanceGroups(cluster.ObjectMeta.Name).Get(groupName)
+	oldGroup, err := clientset.InstanceGroupsFor(cluster).Get(groupName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("error reading InstanceGroup %q: %v", groupName, err)
 	}
@@ -118,7 +120,7 @@ func RunEditInstanceGroup(f *util.Factory, cmd *cobra.Command, args []string, ou
 	)
 
 	ext := "yaml"
-	raw, err := api.ToVersionedYaml(oldGroup)
+	raw, err := kopscodecs.ToVersionedYaml(oldGroup)
 	if err != nil {
 		return err
 	}
@@ -139,7 +141,7 @@ func RunEditInstanceGroup(f *util.Factory, cmd *cobra.Command, args []string, ou
 		return nil
 	}
 
-	newObj, _, err := api.ParseVersionedYaml(edited)
+	newObj, _, err := kopscodecs.ParseVersionedYaml(edited)
 	if err != nil {
 		return fmt.Errorf("error parsing InstanceGroup: %v", err)
 	}
@@ -166,7 +168,8 @@ func RunEditInstanceGroup(f *util.Factory, cmd *cobra.Command, args []string, ou
 		return fmt.Errorf("error populating configuration: %v", err)
 	}
 
-	fullCluster, err := cloudup.PopulateClusterSpec(cluster)
+	assetBuilder := assets.NewAssetBuilder(cluster, "")
+	fullCluster, err := cloudup.PopulateClusterSpec(clientset, cluster, assetBuilder)
 	if err != nil {
 		return err
 	}
@@ -177,7 +180,7 @@ func RunEditInstanceGroup(f *util.Factory, cmd *cobra.Command, args []string, ou
 	}
 
 	// Note we perform as much validation as we can, before writing a bad config
-	_, err = clientset.InstanceGroups(cluster.ObjectMeta.Name).Update(fullGroup)
+	_, err = clientset.InstanceGroupsFor(cluster).Update(fullGroup)
 	if err != nil {
 		return err
 	}

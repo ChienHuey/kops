@@ -16,7 +16,7 @@ The [dashboard project](https://github.com/kubernetes/dashboard) provides a nice
 
 Install using:
 ```
-kubectl create -f https://raw.githubusercontent.com/kubernetes/kops/master/addons/kubernetes-dashboard/v1.5.0.yaml
+kubectl create -f https://raw.githubusercontent.com/kubernetes/kops/master/addons/kubernetes-dashboard/v1.8.1.yaml
 ```
 
 And then navigate to `https://api.<clustername>/ui`
@@ -28,6 +28,28 @@ The login credentials are:
 * Username: `admin`
 * Password: get by running `kops get secrets kube --type secret -oplaintext` or `kubectl config view --minify`
 
+#### RBAC
+
+For k8s version > 1.6 and [rbac](https://kubernetes.io/docs/admin/authorization/rbac/) enabled it's necessary to add your own permission to the dashboard. Please read the [rbac](https://kubernetes.io/docs/admin/authorization/rbac/) docs before applying permissions. 
+
+Below you see an example giving **full access** to the dashboard.
+
+```
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: kubernetes-dashboard
+  labels:
+    k8s-app: kubernetes-dashboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: kubernetes-dashboard
+  namespace: kube-system
+  ```
 
 ### Monitoring with Heapster - Standalone
 
@@ -35,7 +57,7 @@ Monitoring supports the horizontal pod autoscaler.
 
 Install using:
 ```
-kubectl create -f https://raw.githubusercontent.com/kubernetes/kops/master/addons/monitoring-standalone/v1.3.0.yaml
+kubectl create -f https://raw.githubusercontent.com/kubernetes/kops/master/addons/monitoring-standalone/v1.7.0.yaml
 ```
 
 
@@ -51,7 +73,7 @@ to ELB-backed `LoadBalancer` services created by Kubernetes. Install using:
 
 The project is created by wearemolecule, and maintained at
 [wearemolecule/route53-kubernetes](https://github.com/wearemolecule/route53-kubernetes).
-[Usage instructions](addons/route53-mapper/README.md)
+[Usage instructions](https://github.com/kubernetes/kops/blob/master/addons/route53-mapper/README.md)
 
 ```
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/kops/master/addons/route53-mapper/v1.3.0.yml

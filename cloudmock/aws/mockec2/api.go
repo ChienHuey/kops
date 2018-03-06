@@ -33,7 +33,7 @@ type MockEC2 struct {
 	SecurityGroups      []*ec2.SecurityGroup
 
 	subnetNumber int
-	Subnets      []*ec2.Subnet
+	subnets      map[string]*subnetInfo
 
 	volumeNumber int
 	Volumes      []*ec2.Volume
@@ -44,6 +44,9 @@ type MockEC2 struct {
 
 	vpcNumber int
 	Vpcs      map[string]*vpcInfo
+
+	internetGatewayNumber int
+	InternetGateways      map[string]*internetGatewayInfo
 }
 
 var _ ec2iface.EC2API = &MockEC2{}

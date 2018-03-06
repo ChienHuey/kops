@@ -17,10 +17,11 @@ limitations under the License.
 package model
 
 import (
-	"github.com/golang/glog"
 	"k8s.io/kops/nodeup/pkg/distros"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
+
+	"github.com/golang/glog"
 )
 
 // EtcdBuilder installs etcd
@@ -28,8 +29,9 @@ type EtcdBuilder struct {
 	*NodeupModelContext
 }
 
-var _ fi.ModelBuilder = &LogrotateBuilder{}
+var _ fi.ModelBuilder = &EtcdBuilder{}
 
+// Build is responsible for creating the etcd user
 func (b *EtcdBuilder) Build(c *fi.ModelBuilderContext) error {
 	if !b.IsMaster {
 		return nil

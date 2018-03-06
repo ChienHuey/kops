@@ -14,16 +14,24 @@ Ps: Steps below assume a recent version of Terraform. There's a workaround for a
 
 #### Set up remote state
 
-You could keep your Terraform state locally, but we **strongly recommend** saving it on S3 with versioning turned on on that bucket. Configure a remote S3 store like so:
+You could keep your Terraform state locally, but we **strongly recommend** saving it on S3 with versioning turned on on that bucket. Configure a remote S3 store with a setting like below:
 
 ```
-$ terraform remote config \
-  -backend=s3 \
-  -backend-config="bucket=mycompany.terraform>" \
-  -backend-config="key=infrastructure.tfstate" \
-  -backend-config="region=us-east-1"
+terraform {
+  backend "s3" {
+    bucket = "mybucket"
+    key    = "path/to/my/key"
+    region = "us-east-1"
+  }
+}
 ```
 
+Then run:
+
+```
+$ terraform init
+```
+to set up s3 backend.
 Learn more [about Terraform state here](https://www.terraform.io/docs/state/remote.html).
 
 #### Initialize/create a cluster
@@ -99,7 +107,7 @@ Ps: You don't have to `kops delete cluster` if you just want to recreate from sc
 
 #### Workaround for Terraform <0.7
 
-Before terraform version 0.7, there was a bug where it could not create AWS tags containing a dot. We recommend upgrading to version 0.7 or laster, which will fix this bug. Please note that this issue only affects the volumes.
+Before terraform version 0.7, there was a bug where it could not create AWS tags containing a dot. We recommend upgrading to version 0.7 or later, which will fix this bug. Please note that this issue only affects the volumes.
 
 There's a workaround if you need to use an earlier version. We divide the cloudup model into three parts:
 

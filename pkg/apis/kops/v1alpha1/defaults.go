@@ -22,10 +22,7 @@ import (
 )
 
 func addDefaultingFuncs(scheme *runtime.Scheme) error {
-	RegisterDefaults(scheme)
-	return scheme.AddDefaultingFuncs(
-		SetDefaults_ClusterSpec,
-	)
+	return RegisterDefaults(scheme)
 }
 
 func SetDefaults_ClusterSpec(obj *ClusterSpec) {
@@ -76,6 +73,21 @@ func SetDefaults_ClusterSpec(obj *ClusterSpec) {
 	if obj.Authorization.IsEmpty() {
 		// Before the Authorization field was introduced, the behaviour was alwaysAllow
 		obj.Authorization.AlwaysAllow = &AlwaysAllowAuthorizationSpec{}
+	}
+
+	if obj.IAM == nil {
+		obj.IAM = &IAMSpec{
+			Legacy: true,
+		}
+	}
+
+	if obj.Networking != nil {
+		if obj.Networking.Flannel != nil {
+			if obj.Networking.Flannel.Backend == "" {
+				// Populate with legacy default value; new clusters will be created with vxlan by create cluster
+				obj.Networking.Flannel.Backend = "udp"
+			}
+		}
 	}
 
 }

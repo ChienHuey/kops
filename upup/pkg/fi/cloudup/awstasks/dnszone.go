@@ -19,6 +19,11 @@ package awstasks
 import (
 	"fmt"
 
+	"math/rand"
+	"reflect"
+	"strconv"
+	"strings"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/route53"
 	"github.com/golang/glog"
@@ -26,16 +31,14 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
-	"math/rand"
-	"reflect"
-	"strconv"
-	"strings"
 )
 
 // DNSZone is a zone object in a dns provider
 //go:generate fitask -type=DNSZone
 type DNSZone struct {
-	Name    *string
+	Name      *string
+	Lifecycle *fi.Lifecycle
+
 	DNSName *string
 	ZoneID  *string
 
@@ -91,6 +94,9 @@ func (e *DNSZone) Find(c *fi.Context) (*DNSZone, error) {
 	if e.DNSName == nil {
 		e.DNSName = actual.DNSName
 	}
+
+	// Avoid spurious changes
+	actual.Lifecycle = e.Lifecycle
 
 	return actual, nil
 }

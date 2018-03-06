@@ -27,14 +27,14 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/kutil"
 	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
-	"k8s.io/kubernetes/pkg/util/i18n"
+	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
 )
 
 var (
-	toolbox_convert_imported_long = templates.LongDesc(i18n.T(`
+	toolboxConvertImportedLong = templates.LongDesc(i18n.T(`
 	Convert an imported cluster into a kops cluster.`))
 
-	toolbox_convert_imported_example = templates.Examples(i18n.T(`
+	toolboxConvertImportedExample = templates.Examples(i18n.T(`
 
 	# Import and convert a cluster
 	kops import cluster --name k8s-cluster.example.com --region us-east-1 \
@@ -44,7 +44,7 @@ var (
 	  --newname k8s-cluster.example.com
 	`))
 
-	toolbox_convert_imported_short = i18n.T(`Convert an imported cluster into a kops cluster.`)
+	toolboxConvertImportedShort = i18n.T(`Convert an imported cluster into a kops cluster.`)
 )
 
 type ToolboxConvertImportedOptions struct {
@@ -66,9 +66,9 @@ func NewCmdToolboxConvertImported(f *util.Factory, out io.Writer) *cobra.Command
 
 	cmd := &cobra.Command{
 		Use:     "convert-imported",
-		Short:   toolbox_convert_imported_short,
-		Long:    toolbox_convert_imported_long,
-		Example: toolbox_convert_imported_example,
+		Short:   toolboxConvertImportedShort,
+		Long:    toolboxConvertImportedLong,
+		Example: toolboxConvertImportedExample,
 		Run: func(cmd *cobra.Command, args []string) {
 			if err := rootCommand.ProcessArgs(args); err != nil {
 				exitWithError(err)
@@ -99,12 +99,16 @@ func RunToolboxConvertImported(f *util.Factory, out io.Writer, options *ToolboxC
 		return fmt.Errorf("ClusterName is required")
 	}
 
-	cluster, err := clientset.Clusters().Get(options.ClusterName)
+	cluster, err := clientset.GetCluster(options.ClusterName)
 	if err != nil {
 		return err
 	}
 
-	list, err := clientset.InstanceGroups(cluster.ObjectMeta.Name).List(metav1.ListOptions{})
+	if cluster == nil {
+		return fmt.Errorf("cluster %q not found", options.ClusterName)
+	}
+
+	list, err := clientset.InstanceGroupsFor(cluster).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}

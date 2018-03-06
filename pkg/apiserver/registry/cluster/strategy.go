@@ -28,7 +28,9 @@ import (
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/names"
 
+	"github.com/golang/glog"
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/apis/kops/validation"
 )
 
 type clusterStrategy struct {
@@ -36,10 +38,12 @@ type clusterStrategy struct {
 	names.NameGenerator
 }
 
-var Strategy = clusterStrategy{kops.Scheme, names.SimpleNameGenerator}
+func NewStrategy(typer runtime.ObjectTyper) clusterStrategy {
+	return clusterStrategy{typer, names.SimpleNameGenerator}
+}
 
 func (clusterStrategy) NamespaceScoped() bool {
-	return false
+	return true
 }
 
 func (clusterStrategy) PrepareForCreate(ctx genericapirequest.Context, obj runtime.Object) {
@@ -65,16 +69,17 @@ func (clusterStrategy) Canonicalize(obj runtime.Object) {
 }
 
 func (clusterStrategy) ValidateUpdate(ctx genericapirequest.Context, obj, old runtime.Object) field.ErrorList {
-	return field.ErrorList{}
-	// return validation.ValidateServiceInjectionUpdate(obj.(*serviceinjection.ServiceInjection), old.(*serviceinjection.ServiceInjection))
+	glog.Warningf("Performing cluster update without status validation")
+	var status *kops.ClusterStatus
+	return validation.ValidateClusterUpdate(obj.(*kops.Cluster), status, old.(*kops.Cluster))
 }
 
-func GetAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
+func GetAttrs(obj runtime.Object) (labels.Set, fields.Set, bool, error) {
 	cluster, ok := obj.(*kops.Cluster)
 	if !ok {
-		return nil, nil, fmt.Errorf("given object is not a Cluster.")
+		return nil, nil, false, fmt.Errorf("given object is not a Cluster.")
 	}
-	return labels.Set(cluster.Labels), ClusterToSelectableFields(cluster), nil
+	return labels.Set(cluster.Labels), ClusterToSelectableFields(cluster), cluster.Initializers != nil, nil
 }
 
 // MatchCluster is the filter used by the generic etcd backend to watch events

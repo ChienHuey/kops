@@ -18,45 +18,44 @@ package model
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awstasks"
-	"strings"
+	"k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 )
 
 // NetworkModelBuilder configures network objects
 type NetworkModelBuilder struct {
 	*KopsModelContext
+	Lifecycle *fi.Lifecycle
 }
 
 var _ fi.ModelBuilder = &NetworkModelBuilder{}
 
 func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
-	kubernetesVersion, err := b.KubernetesVersion()
-	if err != nil {
-		return err
-	}
-
 	sharedVPC := b.Cluster.SharedVPC()
 	vpcName := b.ClusterName()
+	tags := b.CloudTags(vpcName, sharedVPC)
 
 	// VPC that holds everything for the cluster
 	{
-		tags := b.CloudTags(vpcName, sharedVPC)
 
 		t := &awstasks.VPC{
 			Name:             s(vpcName),
+			Lifecycle:        b.Lifecycle,
 			Shared:           fi.Bool(sharedVPC),
 			EnableDNSSupport: fi.Bool(true),
 			Tags:             tags,
 		}
 
-		if sharedVPC && VersionGTE(kubernetesVersion, 1, 5) {
+		if sharedVPC && b.IsKubernetesGTE("1.5") {
 			// If we're running k8s 1.5, and we have e.g.  --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP,LegacyHostIP
 			// then we don't need EnableDNSHostnames any more
-			glog.V(4).Infof("Kubernetes version %q; skipping EnableDNSHostnames requirement on VPC", kubernetesVersion)
+			glog.V(4).Infof("Kubernetes version %q; skipping EnableDNSHostnames requirement on VPC", b.KubernetesVersion())
 		} else {
 			// In theory we don't need to enable it for >= 1.5,
 			// but seems safer to stick with existing behaviour
@@ -67,6 +66,7 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		if b.Cluster.Spec.NetworkID != "" {
 			t.ID = s(b.Cluster.Spec.NetworkID)
 		}
+
 		if b.Cluster.Spec.NetworkCIDR != "" {
 			t.CIDR = s(b.Cluster.Spec.NetworkCIDR)
 		}
@@ -76,7 +76,11 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 	if !sharedVPC {
 		dhcp := &awstasks.DHCPOptions{
 			Name:              s(b.ClusterName()),
+			Lifecycle:         b.Lifecycle,
 			DomainNameServers: s("AmazonProvidedDNS"),
+
+			Tags:   tags,
+			Shared: fi.Bool(sharedVPC),
 		}
 		if b.Region == "us-east-1" {
 			dhcp.DomainName = s("ec2.internal")
@@ -86,8 +90,8 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		c.AddTask(dhcp)
 
 		c.AddTask(&awstasks.VPCDHCPOptionsAssociation{
-			Name: s(b.ClusterName()),
-
+			Name:        s(b.ClusterName()),
+			Lifecycle:   b.Lifecycle,
 			VPC:         b.LinkToVPC(),
 			DHCPOptions: dhcp,
 		})
@@ -109,22 +113,31 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 	{
 		// The internet gateway is the main entry point to the cluster.
 		igw := &awstasks.InternetGateway{
-			Name:   s(b.ClusterName()),
-			VPC:    b.LinkToVPC(),
-			Shared: fi.Bool(sharedVPC),
+			Name:      s(b.ClusterName()),
+			Lifecycle: b.Lifecycle,
+			VPC:       b.LinkToVPC(),
+			Shared:    fi.Bool(sharedVPC),
+
+			Tags: tags,
 		}
 		c.AddTask(igw)
 
 		if !allSubnetsShared {
 			publicRouteTable = &awstasks.RouteTable{
-				Name: s(b.ClusterName()),
-				VPC:  b.LinkToVPC(),
+				Name:      s(b.ClusterName()),
+				Lifecycle: b.Lifecycle,
+
+				VPC: b.LinkToVPC(),
+
+				Tags:   tags,
+				Shared: fi.Bool(sharedVPC),
 			}
 			c.AddTask(publicRouteTable)
 
 			// TODO: Validate when allSubnetsShared
 			c.AddTask(&awstasks.Route{
 				Name:            s("0.0.0.0/0"),
+				Lifecycle:       b.Lifecycle,
 				CIDR:            s("0.0.0.0/0"),
 				RouteTable:      publicRouteTable,
 				InternetGateway: igw,
@@ -140,8 +153,23 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		subnetName := subnetSpec.Name + "." + b.ClusterName()
 		tags := b.CloudTags(subnetName, sharedSubnet)
 
+		// Apply tags so that Kubernetes knows which subnets should be used for internal/external ELBs
+		switch subnetSpec.Type {
+		case kops.SubnetTypePublic, kops.SubnetTypeUtility:
+			tags[aws.TagNameSubnetPublicELB] = "1"
+
+		case kops.SubnetTypePrivate:
+			tags[aws.TagNameSubnetInternalELB] = "1"
+
+		default:
+			glog.V(2).Infof("unable to properly tag subnet %q because it has unknown type %q. Load balancers may be created in incorrect subnets", subnetSpec.Name, subnetSpec.Type)
+		}
+
+		tags["SubnetType"] = string(subnetSpec.Type)
+
 		subnet := &awstasks.Subnet{
 			Name:             s(subnetName),
+			Lifecycle:        b.Lifecycle,
 			VPC:              b.LinkToVPC(),
 			AvailabilityZone: s(subnetSpec.Zone),
 			CIDR:             s(subnetSpec.CIDR),
@@ -159,6 +187,7 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			if !sharedSubnet {
 				c.AddTask(&awstasks.RouteTableAssociation{
 					Name:       s(subnetSpec.Name + "." + b.ClusterName()),
+					Lifecycle:  b.Lifecycle,
 					RouteTable: publicRouteTable,
 					Subnet:     subnet,
 				})
@@ -173,6 +202,7 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 				// Map the Private subnet to the Private route table
 				c.AddTask(&awstasks.RouteTableAssociation{
 					Name:       s("private-" + subnetSpec.Name + "." + b.ClusterName()),
+					Lifecycle:  b.Lifecycle,
 					RouteTable: b.LinkToPrivateRouteTableInZone(subnetSpec.Zone),
 					Subnet:     subnet,
 				})
@@ -199,6 +229,7 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 
 				ngw = &awstasks.NatGateway{
 					Name:                 s(zone + "." + b.ClusterName()),
+					Lifecycle:            b.Lifecycle,
 					Subnet:               utilitySubnet,
 					ID:                   s(b.Cluster.Spec.Subnets[i].Egress),
 					AssociatedRouteTable: b.LinkToPrivateRouteTableInZone(zone),
@@ -218,10 +249,15 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			// subnet needs a NGW, lets create it. We tie it to a subnet
 			// so we can track it in AWS
 			var eip = &awstasks.ElasticIP{}
-
 			eip = &awstasks.ElasticIP{
-				Name: s(zone + "." + b.ClusterName()),
+				Name:                           s(zone + "." + b.ClusterName()),
+				Lifecycle:                      b.Lifecycle,
 				AssociatedNatGatewayRouteTable: b.LinkToPrivateRouteTableInZone(zone),
+			}
+
+			if b.Cluster.Spec.Subnets[i].PublicIP != "" {
+				eip.PublicIP = s(b.Cluster.Spec.Subnets[i].PublicIP)
+				eip.Tags = b.CloudTags(*eip.Name, true)
 			}
 
 			c.AddTask(eip)
@@ -236,6 +272,7 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			//var ngw = &awstasks.NatGateway{}
 			ngw = &awstasks.NatGateway{
 				Name:                 s(zone + "." + b.ClusterName()),
+				Lifecycle:            b.Lifecycle,
 				Subnet:               utilitySubnet,
 				ElasticIP:            eip,
 				AssociatedRouteTable: b.LinkToPrivateRouteTableInZone(zone),
@@ -243,12 +280,34 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			c.AddTask(ngw)
 		}
 
+		// kops needs to have the correct shared or owned tag on private route tables,
+		// but the 'Name' tag  for the private route table does not match the standard
+		// 'Name' tag value.
+		// Making a copy of the map to use for private route tables, and maintaining the 'Name'
+		// tag with a value like "private-us-test-1a.privatedns1.example.com" instead of using
+		// the usual value like "privatedns1.example.com".
+		privateTags := make(map[string]string)
+		for k, v := range tags {
+			privateTags[k] = v
+		}
+		// We do not set the Name on shared resources remove it if it exists
+		// otherwise set it.
+		if sharedVPC {
+			delete(privateTags, "Name")
+		} else {
+			privateTags["Name"] = b.NamePrivateRouteTableInZone(zone)
+		}
+
 		// Private Route Table
 		//
 		// The private route table that will route to the NAT Gateway
 		rt := &awstasks.RouteTable{
-			Name: s(b.NamePrivateRouteTableInZone(zone)),
-			VPC:  b.LinkToVPC(),
+			Name:      s(b.NamePrivateRouteTableInZone(zone)),
+			VPC:       b.LinkToVPC(),
+			Lifecycle: b.Lifecycle,
+
+			Shared: fi.Bool(sharedVPC),
+			Tags:   privateTags,
 		}
 		c.AddTask(rt)
 
@@ -258,6 +317,7 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		// Will route to the NAT Gateway
 		c.AddTask(&awstasks.Route{
 			Name:       s("private-" + zone + "-0.0.0.0/0"),
+			Lifecycle:  b.Lifecycle,
 			CIDR:       s("0.0.0.0/0"),
 			RouteTable: rt,
 			NatGateway: ngw,

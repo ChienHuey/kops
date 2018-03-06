@@ -19,12 +19,13 @@ package model
 import (
 	"bufio"
 	"fmt"
+	"os"
+	"strings"
+
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/util"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
-	"os"
-	"strings"
 )
 
 const CloudConfigFilePath = "/etc/kubernetes/cloud.config"
@@ -67,6 +68,9 @@ func (b *CloudConfigBuilder) Build(c *fi.ModelBuilderContext) error {
 	case "aws":
 		if cloudConfig.DisableSecurityGroupIngress != nil {
 			lines = append(lines, fmt.Sprintf("DisableSecurityGroupIngress = %t", *cloudConfig.DisableSecurityGroupIngress))
+		}
+		if cloudConfig.ElbSecurityGroup != nil {
+			lines = append(lines, "ElbSecurityGroup = "+*cloudConfig.ElbSecurityGroup)
 		}
 	case "vsphere":
 		vm_uuid, err := getVMUUID(b.Cluster.Spec.KubernetesVersion)

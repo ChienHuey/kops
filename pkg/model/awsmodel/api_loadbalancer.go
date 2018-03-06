@@ -24,8 +24,10 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awstasks"
+	"k8s.io/kops/upup/pkg/fi/fitasks"
 )
 
 const LoadBalancerDefaultIdleTimeout = 5 * time.Minute
@@ -33,6 +35,8 @@ const LoadBalancerDefaultIdleTimeout = 5 * time.Minute
 // APILoadBalancerBuilder builds a LoadBalancer for accessing the API
 type APILoadBalancerBuilder struct {
 	*AWSModelContext
+	Lifecycle         *fi.Lifecycle
+	SecurityLifecycle *fi.Lifecycle
 }
 
 var _ fi.ModelBuilder = &APILoadBalancerBuilder{}
@@ -99,7 +103,9 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 
 		elb = &awstasks.LoadBalancer{
-			Name:             s("api." + b.ClusterName()),
+			Name:      s("api." + b.ClusterName()),
+			Lifecycle: b.Lifecycle,
+
 			LoadBalancerName: s(loadBalancerName),
 			SecurityGroups: []*awstasks.SecurityGroup{
 				b.LinkToELBSecurityGroup("api"),
@@ -111,7 +117,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 
 			// Configure fast-recovery health-checks
 			HealthCheck: &awstasks.LoadBalancerHealthCheck{
-				Target:             s("TCP:443"),
+				Target:             s("SSL:443"),
 				Timeout:            i64(5),
 				Interval:           i64(10),
 				HealthyThreshold:   i64(2),
@@ -138,7 +144,9 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	// Create security group for API ELB
 	{
 		t := &awstasks.SecurityGroup{
-			Name:             s(b.ELBSecurityGroupName("api")),
+			Name:      s(b.ELBSecurityGroupName("api")),
+			Lifecycle: b.SecurityLifecycle,
+
 			VPC:              b.LinkToVPC(),
 			Description:      s("Security group for api ELB"),
 			RemoveExtraRules: []string{"port=443"},
@@ -149,7 +157,9 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	// Allow traffic from ELB to egress freely
 	{
 		t := &awstasks.SecurityGroupRule{
-			Name:          s("api-elb-egress"),
+			Name:      s("api-elb-egress"),
+			Lifecycle: b.SecurityLifecycle,
+
 			SecurityGroup: b.LinkToELBSecurityGroup("api"),
 			Egress:        fi.Bool(true),
 			CIDR:          s("0.0.0.0/0"),
@@ -161,7 +171,9 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	{
 		for _, cidr := range b.Cluster.Spec.KubernetesAPIAccess {
 			t := &awstasks.SecurityGroupRule{
-				Name:          s("https-api-elb-" + cidr),
+				Name:      s("https-api-elb-" + cidr),
+				Lifecycle: b.SecurityLifecycle,
+
 				SecurityGroup: b.LinkToELBSecurityGroup("api"),
 				CIDR:          s(cidr),
 				FromPort:      i64(443),
@@ -172,10 +184,29 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
+	// Add precreated additional security groups to the ELB
+	{
+		for _, id := range b.Cluster.Spec.API.LoadBalancer.AdditionalSecurityGroups {
+			t := &awstasks.SecurityGroup{
+				Name:   fi.String(id),
+				ID:     fi.String(id),
+				Shared: fi.Bool(true),
+
+				Lifecycle: b.SecurityLifecycle,
+			}
+			if err := c.EnsureTask(t); err != nil {
+				return err
+			}
+			elb.SecurityGroups = append(elb.SecurityGroups, t)
+		}
+	}
+
 	// Allow HTTPS to the master instances from the ELB
 	{
 		t := &awstasks.SecurityGroupRule{
-			Name:          s("https-elb-to-master"),
+			Name:      s("https-elb-to-master"),
+			Lifecycle: b.SecurityLifecycle,
+
 			SecurityGroup: b.LinkToSecurityGroup(kops.InstanceGroupRoleMaster),
 			SourceGroup:   b.LinkToELBSecurityGroup("api"),
 			FromPort:      i64(443),
@@ -185,9 +216,22 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		c.AddTask(t)
 	}
 
+	if dns.IsGossipHostname(b.Cluster.Name) || b.UsePrivateDNS() {
+		// Ensure the ELB hostname is included in the TLS certificate,
+		// if we're not going to use an alias for it
+		// TODO: I don't love this technique for finding the task by name & modifying it
+		masterKeypairTask, found := c.Tasks["Keypair/master"]
+		if !found {
+			return fmt.Errorf("keypair/master task not found")
+		}
+		masterKeypair := masterKeypairTask.(*fitasks.Keypair)
+		masterKeypair.AlternateNameTasks = append(masterKeypair.AlternateNameTasks, elb)
+	}
+
 	for _, ig := range b.MasterInstanceGroups() {
 		t := &awstasks.LoadBalancerAttachment{
-			Name: s("api-" + ig.ObjectMeta.Name),
+			Name:      s("api-" + ig.ObjectMeta.Name),
+			Lifecycle: b.Lifecycle,
 
 			LoadBalancer:     b.LinkToELB("api"),
 			AutoscalingGroup: b.LinkToAutoscalingGroup(ig),

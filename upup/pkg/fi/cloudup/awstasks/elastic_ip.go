@@ -35,7 +35,9 @@ import (
 // Elastic IP
 // Representation the EIP AWS task
 type ElasticIP struct {
-	Name     *string
+	Name      *string
+	Lifecycle *fi.Lifecycle
+
 	ID       *string
 	PublicIP *string
 
@@ -43,6 +45,8 @@ type ElasticIP struct {
 
 	// TagOnSubnet tags a subnet with the ElasticIP.  Deprecated: doesn't round-trip with terraform.
 	TagOnSubnet *Subnet
+
+	Tags map[string]string
 
 	// AssociatedNatGatewayRouteTable follows the RouteTable -> NatGateway -> ElasticIP
 	AssociatedNatGatewayRouteTable *RouteTable
@@ -163,6 +167,9 @@ func (e *ElasticIP) find(cloud awsup.AWSCloud) (*ElasticIP, error) {
 
 		e.ID = actual.ID
 
+		// Avoid spurious changes
+		actual.Lifecycle = e.Lifecycle
+
 		return actual, nil
 	}
 	return nil, nil
@@ -224,6 +231,10 @@ func (_ *ElasticIP) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *ElasticIP) e
 	} else {
 		publicIp = a.PublicIP
 		eipId = a.ID
+		err := t.AddAWSTags(*a.ID, changes.Tags)
+		if err != nil {
+			return fmt.Errorf("Unable to tag eip %v", err)
+		}
 	}
 
 	// Tag the associated subnet

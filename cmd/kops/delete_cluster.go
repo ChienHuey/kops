@@ -24,16 +24,15 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/kops/cmd/kops/util"
 	api "k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/apis/kops/registry"
 	"k8s.io/kops/pkg/kubeconfig"
 	"k8s.io/kops/pkg/resources"
+	resourceops "k8s.io/kops/pkg/resources/ops"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/util/pkg/tables"
-	"k8s.io/kops/util/pkg/vfs"
 	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
-	"k8s.io/kubernetes/pkg/util/i18n"
+	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
 )
 
 type DeleteClusterOptions struct {
@@ -45,21 +44,19 @@ type DeleteClusterOptions struct {
 }
 
 var (
-	delete_cluster_long = templates.LongDesc(i18n.T(`
-	Deletes a Kubneretes cluster and all associated resources.  Resources include instancegroups, and
-	the state store.  There is no "UNDO" for this command.
+	deleteClusterLong = templates.LongDesc(i18n.T(`
+	Deletes a Kubernetes cluster and all associated resources.  Resources include instancegroups,
+	secrets and the state store.  There is no "UNDO" for this command.
 	`))
 
-	delete_cluster_example = templates.Examples(i18n.T(`
+	deleteClusterExample = templates.Examples(i18n.T(`
 	# Delete a cluster.
+	# The --yes option runs the command immediately.
 	kops delete cluster --name=k8s.cluster.site --yes
 
-	# Delete an instancegroup for the k8s-cluster.example.com cluster.
-	# The --yes option runs the command immediately.
-	kops delete ig --name=k8s-cluster.example.com node-example --yes
 	`))
 
-	delete_cluster_short = i18n.T("Delete a cluster.")
+	deleteClusterShort = i18n.T("Delete a cluster.")
 )
 
 func NewCmdDeleteCluster(f *util.Factory, out io.Writer) *cobra.Command {
@@ -67,9 +64,9 @@ func NewCmdDeleteCluster(f *util.Factory, out io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:     "cluster CLUSTERNAME [--yes]",
-		Short:   delete_cluster_short,
-		Long:    delete_cluster_long,
-		Example: delete_cluster_example,
+		Short:   deleteClusterShort,
+		Long:    deleteClusterLong,
+		Example: deleteClusterExample,
 		Run: func(cmd *cobra.Command, args []string) {
 			err := rootCommand.ProcessArgs(args)
 			if err != nil {
@@ -97,8 +94,6 @@ func NewCmdDeleteCluster(f *util.Factory, out io.Writer) *cobra.Command {
 type getter func(o interface{}) interface{}
 
 func RunDeleteCluster(f *util.Factory, out io.Writer, options *DeleteClusterOptions) error {
-	var configBase vfs.Path
-
 	clusterName := options.ClusterName
 	if clusterName == "" {
 		return fmt.Errorf("--name is required (for safety)")
@@ -124,11 +119,6 @@ func RunDeleteCluster(f *util.Factory, out io.Writer, options *DeleteClusterOpti
 		if err != nil {
 			return err
 		}
-
-		configBase, err = registry.ConfigBase(cluster)
-		if err != nil {
-			return err
-		}
 	}
 
 	wouldDeleteCloudResources := false
@@ -141,13 +131,17 @@ func RunDeleteCluster(f *util.Factory, out io.Writer, options *DeleteClusterOpti
 			}
 		}
 
-		d := &resources.ClusterResources{}
-		d.ClusterName = clusterName
-		d.Cloud = cloud
-
-		clusterResources, err := d.ListResources()
+		allResources, err := resourceops.ListResources(cloud, clusterName, options.Region)
 		if err != nil {
 			return err
+		}
+
+		clusterResources := make(map[string]*resources.Resource)
+		for k, resource := range allResources {
+			if resource.Shared {
+				continue
+			}
+			clusterResources[k] = resource
 		}
 
 		if len(clusterResources) == 0 {
@@ -156,16 +150,16 @@ func RunDeleteCluster(f *util.Factory, out io.Writer, options *DeleteClusterOpti
 			wouldDeleteCloudResources = true
 
 			t := &tables.Table{}
-			t.AddColumn("TYPE", func(r *resources.ResourceTracker) string {
+			t.AddColumn("TYPE", func(r *resources.Resource) string {
 				return r.Type
 			})
-			t.AddColumn("ID", func(r *resources.ResourceTracker) string {
+			t.AddColumn("ID", func(r *resources.Resource) string {
 				return r.ID
 			})
-			t.AddColumn("NAME", func(r *resources.ResourceTracker) string {
+			t.AddColumn("NAME", func(r *resources.Resource) string {
 				return r.Name
 			})
-			var l []*resources.ResourceTracker
+			var l []*resources.Resource
 			for _, v := range clusterResources {
 				l = append(l, v)
 			}
@@ -176,12 +170,13 @@ func RunDeleteCluster(f *util.Factory, out io.Writer, options *DeleteClusterOpti
 			}
 
 			if !options.Yes {
-				return fmt.Errorf("Must specify --yes to delete")
+				fmt.Fprintf(out, "\nMust specify --yes to delete cluster\n")
+				return nil
 			}
 
 			fmt.Fprintf(out, "\n")
 
-			err = d.DeleteResources(clusterResources)
+			err = resourceops.DeleteResources(cloud, clusterResources)
 			if err != nil {
 				return err
 			}
@@ -197,7 +192,11 @@ func RunDeleteCluster(f *util.Factory, out io.Writer, options *DeleteClusterOpti
 			}
 			return nil
 		}
-		err := registry.DeleteAllClusterState(configBase)
+		clientset, err := f.Clientset()
+		if err != nil {
+			return err
+		}
+		err = clientset.DeleteCluster(cluster)
 		if err != nil {
 			return fmt.Errorf("error removing cluster from state store: %v", err)
 		}
@@ -210,6 +209,6 @@ func RunDeleteCluster(f *util.Factory, out io.Writer, options *DeleteClusterOpti
 		glog.Warningf("error removing kube config: %v", err)
 	}
 
-	fmt.Fprintf(out, "\nCluster deleted\n")
+	fmt.Fprintf(out, "\nDeleted cluster: %q\n", clusterName)
 	return nil
 }

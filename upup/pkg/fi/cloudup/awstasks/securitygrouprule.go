@@ -19,6 +19,8 @@ package awstasks
 import (
 	"fmt"
 
+	"strings"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/glog"
@@ -27,12 +29,12 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
-	"strings"
 )
 
 //go:generate fitask -type=SecurityGroupRule
 type SecurityGroupRule struct {
-	Name *string
+	Name      *string
+	Lifecycle *fi.Lifecycle
 
 	SecurityGroup *SecurityGroup
 	CIDR          *string
@@ -113,6 +115,10 @@ func (e *SecurityGroupRule) Find(c *fi.Context) (*SecurityGroupRule, error) {
 		if e.SourceGroup != nil {
 			actual.SourceGroup = &SecurityGroup{ID: e.SourceGroup.ID}
 		}
+
+		// Avoid spurious changes
+		actual.Lifecycle = e.Lifecycle
+
 		return actual, nil
 	}
 

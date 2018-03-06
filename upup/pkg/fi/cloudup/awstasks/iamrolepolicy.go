@@ -20,6 +20,8 @@ import (
 	"fmt"
 
 	"encoding/json"
+	"net/url"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/iam"
@@ -29,12 +31,13 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
-	"net/url"
 )
 
 //go:generate fitask -type=IAMRolePolicy
 type IAMRolePolicy struct {
-	ID   *string
+	ID        *string
+	Lifecycle *fi.Lifecycle
+
 	Name *string
 	Role *IAMRole
 
@@ -76,9 +79,13 @@ func (e *IAMRolePolicy) Find(c *fi.Context) (*IAMRolePolicy, error) {
 		}
 		actual.PolicyDocument = fi.WrapResource(fi.NewStringResource(policy))
 	}
+
 	actual.Name = p.PolicyName
 
 	e.ID = actual.ID
+
+	// Avoid spurious changes
+	actual.Lifecycle = e.Lifecycle
 
 	return actual, nil
 }

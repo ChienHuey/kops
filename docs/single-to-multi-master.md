@@ -10,6 +10,8 @@ Please follow all the backup steps before attempting it. Please read the
 [etcd admin guide](https://github.com/coreos/etcd/blob/v2.2.1/Documentation/admin_guide.md)
 before attempting it.
 
+We can migrate from a single-master cluster to a multi-master cluster, but this is a complicated operation. It is easier to create a multi-master cluster using Kops (described [here](https://github.com/kubernetes/kops/blob/master/docs/high_availability.md)). If possible, try to plan this at time of cluster creation.
+
 During this procedure, you will experience **downtime** on the API server, but
 not on the end user services. During this downtime, existing pods will continue
 to work, but you will not be able to create new pods and any existing pod that
@@ -56,22 +58,44 @@ admin@ip-172-20-36-161:~$ exit
 $ scp -r admin@<master-node>:backup-events/ .
 ```
 
-## 2 - Add a new master
+## 2 - Create instance groups
 
-### a - Create the instance group
+### a - Create new master instance group
 
 Create 1 kops instance group for the first one of your new masters, in
 a different AZ from the existing one.
 
 ```bash
-$ kops create instancegroup master-<availability-zone2>
+$ kops create instancegroup master-<availability-zone2> --subnet <availability-zone2> --role Master
+```
+Example:
+
+```bash
+$ kops create ig master-eu-west-1b --subnet eu-west-1b --role Master
 ```
 
  * ``maxSize`` and ``minSize`` should be 1,
- * ``role`` should be ``Master``,
  * only one zone should be listed.
 
-### b - Reference the new masters in your cluster configuration
+### b - Create third master instance group
+
+Instance group for the third master, in a different AZ from the existing one, is
+also required. However, real EC2 instance is not required until the second master launches.
+
+```bash
+$ kops create instancegroup master-<availability-zone3> --subnet <availability-zone3> --role Master
+```
+
+Example:
+
+```bash
+$ kops create ig master-eu-west-1c --subnet eu-west-1c --role Master
+```
+
+ * ``maxSize`` and ``minSize`` should be **0**,
+ * only one zone should be listed.
+
+### c - Reference the new masters in your cluster configuration
 
 *kops will refuse to have only 2 members in the etcd clusters, so we have to
 reference a third one, even if we have not created it yet.*
@@ -79,19 +103,59 @@ reference a third one, even if we have not created it yet.*
 ```bash
 $ kops edit cluster example.com
 ```
- * In ``.spec.etcdClusters`` 2 new members in each cluster, one for each new
+
+ * In ``.spec.etcdClusters`` add 2 new members in each cluster, one for each new
  availability zone.
 
-### c - Add a new member to the etcd clusters
+```yaml
+    - instanceGroup: master-<availability-zone2>
+      name: <availability-zone2-name>
+    - instanceGroup: master-<availability-zone3>
+      name: <availability-zone3-name>
+```
+
+Example:
+
+```yaml
+etcdClusters:
+  - etcdMembers:
+    - instanceGroup: master-eu-west-1a
+      name: a
+    - instanceGroup: master-eu-west-1b
+      name: b
+    - instanceGroup: master-eu-west-1c
+      name: c
+    name: main
+  - etcdMembers:
+    - instanceGroup: master-eu-west-1a
+      name: a
+    - instanceGroup: master-eu-west-1b
+      name: b
+    - instanceGroup: master-eu-west-1c
+      name: c
+    name: events
+```
+
+
+## 3 - Add a new master
+
+### a - Add a new member to the etcd clusters
 
 **The clusters will stop to work until the new member is started**.
 
 ```bash
-$ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member add etcd-<availability-zone2> http://etcd-<availability-zone2>.internal.example.com:2380
-$ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member add etcd-events-<availability-zone2> http://etcd-events-<availability-zone2>.internal.example.com:2381
+$ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member add etcd-<availability-zone2-name> http://etcd-<availability-zone2-name>.internal.example.com:2380 \
+	&& kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member add etcd-events-<availability-zone2-name> http://etcd-events-<availability-zone2-name>.internal.example.com:2381
 ```
 
-### d - Launch the new master
+Example:
+
+```bash
+$ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member add etcd-b http://etcd-b.internal.example.com:2380 \
+	&& kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member add etcd-events-b http://etcd-events-b.internal.example.com:2381
+```
+
+### b - Launch the new master
 
 ```bash
 $ kops update cluster example.com --yes
@@ -111,7 +175,7 @@ Reinitialize the etcd instances:
 * Delete the containers and the data directories:
 
 ```bash
-root@ip-172-20-116-230:~# docker stop $(docker ps | grep "etcd:2.2.1" | awk '{print $1}')
+root@ip-172-20-116-230:~# docker stop $(docker ps | grep "gcr.io/google_containers/etcd" | awk '{print $1}')
 root@ip-172-20-116-230:~# rm -r /mnt/master-vol-03b97b1249caf379a/var/etcd/data-events/member/
 root@ip-172-20-116-230:~# rm -r /mnt/master-vol-0dbfd1f3c60b8c509/var/etcd/data/member/
 ```
@@ -139,27 +203,31 @@ Restart protokube on the new master:
 root@ip-172-20-116-230:~# systemctl start protokube
 ```
 
-## 3 - Add the third master
+## 4 - Add the third master
 
-### a - Create the instance group
+### a - Edit instance group
 
-Create 1 kops instance group for the third master, in
-a different AZ from the existing ones.
+Prepare to launch the third master instance:
 
 ```bash
-$ kops create instancegroup master-<availability-zone3>
+$ kops edit instancegroup master-<availability-zone3>
 ```
 
- * ``maxSize`` and ``minSize`` should be 1,
- * ``role`` should be ``Master``,
- * only one zone should be listed.
+* Replace ``maxSize`` and ``minSize`` values to **1**.
 
 ### b - Add a new member to the etcd clusters
 
  ```bash
- $ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member add etcd-<availability-zone3> http://etcd-<availability-zone3>.internal.example.com:2380
- $ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member add etcd-events-<availability-zone3> http://etcd-events-<availability-zone3>.internal.example.com:2381
+ $ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member add etcd-<availability-zone3-name> http://etcd-<availability-zone3-name>.internal.example.com:2380 \
+	&& kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member add etcd-events-<availability-zone3-name> http://etcd-events-<availability-zone3-name>.internal.example.com:2381
  ```
+
+Example:
+
+```bash
+$ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member add etcd-c http://etcd-c.internal.example.com:2380 \
+	&& kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member add etcd-events-c http://etcd-events-c.internal.example.com:2381
+```
 
 ### c - Launch the third master
 
@@ -179,7 +247,7 @@ $ kops create instancegroup master-<availability-zone3>
  * Delete the containers and the data directories:
 
  ```bash
- root@ip-172-20-139-130:~# docker stop $(docker ps | grep "etcd:2.2.1" | awk '{print $1}')
+ root@ip-172-20-139-130:~# docker stop $(docker ps | grep "gcr.io/google_containers/etcd" | awk '{print $1}')
  root@ip-172-20-139-130:~# rm -r /mnt/master-vol-019796c3511a91b4f//var/etcd/data-events/member/
  root@ip-172-20-139-130:~# rm -r /mnt/master-vol-0c89fd6f6a256b686/var/etcd/data/member/
  ```
@@ -207,7 +275,7 @@ $ kops create instancegroup master-<availability-zone3>
  root@ip-172-20-139-130:~# systemctl start protokube
  ```
 
-## 4 - Cleanup
+## 5 - Cleanup
 
 To be sure that everything runs smoothly and is setup correctly, it is advised
 to terminate the masters one after the other (always keeping 2 of them up and

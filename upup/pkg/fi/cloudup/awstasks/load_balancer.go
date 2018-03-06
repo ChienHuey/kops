@@ -18,9 +18,8 @@ package awstasks
 
 import (
 	"fmt"
-
+	"sort"
 	"strconv"
-
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -32,7 +31,7 @@ import (
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
-	"sort"
+	"k8s.io/kops/util/pkg/slice"
 )
 
 // LoadBalancer manages an ELB.  We find the existing ELB using the Name tag.
@@ -41,7 +40,8 @@ import (
 type LoadBalancer struct {
 	// We use the Name tag to find the existing ELB, because we are (more or less) unrestricted when
 	// it comes to tag values, but the LoadBalancerName is length limited
-	Name *string
+	Name      *string
+	Lifecycle *fi.Lifecycle
 
 	// LoadBalancerName is the name in ELB, possibly different from our name
 	// (ELB is restricted as to names, so we have limited choices!)
@@ -285,6 +285,7 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	actual.DNSName = lb.DNSName
 	actual.HostedZoneId = lb.CanonicalHostedZoneNameID
 	actual.Scheme = lb.Scheme
+	actual.Lifecycle = e.Lifecycle
 
 	for _, subnet := range lb.Subnets {
 		actual.Subnets = append(actual.Subnets, &Subnet{ID: subnet})
@@ -386,6 +387,26 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	actual.Normalize()
 
 	return actual, nil
+}
+
+var _ fi.HasAddress = &LoadBalancer{}
+
+func (e *LoadBalancer) FindIPAddress(context *fi.Context) (*string, error) {
+	cloud := context.Cloud.(awsup.AWSCloud)
+
+	lb, err := FindLoadBalancerByNameTag(cloud, fi.StringValue(e.Name))
+	if err != nil {
+		return nil, err
+	}
+	if lb == nil {
+		return nil, nil
+	}
+
+	lbDnsName := fi.StringValue(lb.DNSName)
+	if lbDnsName == "" {
+		return nil, nil
+	}
+	return &lbDnsName, nil
 }
 
 func (e *LoadBalancer) Run(c *fi.Context) error {
@@ -507,7 +528,29 @@ func (_ *LoadBalancer) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *LoadBalan
 				actualSubnets = append(actualSubnets, fi.StringValue(s.ID))
 			}
 
-			return fmt.Errorf("subnet changes on LoadBalancer not yet implemented: actual=%s -> expected=%s", actualSubnets, expectedSubnets)
+			oldSubnetIDs := slice.GetUniqueStrings(expectedSubnets, actualSubnets)
+			if len(oldSubnetIDs) > 0 {
+				request := &elb.DetachLoadBalancerFromSubnetsInput{}
+				request.SetLoadBalancerName(loadBalancerName)
+				request.SetSubnets(aws.StringSlice(oldSubnetIDs))
+
+				glog.V(2).Infof("Detaching Load Balancer from old subnets")
+				if _, err := t.Cloud.ELB().DetachLoadBalancerFromSubnets(request); err != nil {
+					return fmt.Errorf("Error detaching Load Balancer from old subnets: %v", err)
+				}
+			}
+
+			newSubnetIDs := slice.GetUniqueStrings(actualSubnets, expectedSubnets)
+			if len(newSubnetIDs) > 0 {
+				request := &elb.AttachLoadBalancerToSubnetsInput{}
+				request.SetLoadBalancerName(loadBalancerName)
+				request.SetSubnets(aws.StringSlice(newSubnetIDs))
+
+				glog.V(2).Infof("Attaching Load Balancer to new subnets")
+				if _, err := t.Cloud.ELB().AttachLoadBalancerToSubnets(request); err != nil {
+					return fmt.Errorf("Error attaching Load Balancer to new subnets: %v", err)
+				}
+			}
 		}
 
 		if changes.Listeners != nil {
@@ -614,10 +657,12 @@ func (_ *LoadBalancer) RenderTerraform(t *terraform.TerraformTarget, a, e, chang
 	for _, subnet := range e.Subnets {
 		tf.Subnets = append(tf.Subnets, subnet.TerraformLink())
 	}
+	terraform.SortLiterals(tf.Subnets)
 
 	for _, sg := range e.SecurityGroups {
 		tf.SecurityGroups = append(tf.SecurityGroups, sg.TerraformLink())
 	}
+	terraform.SortLiterals(tf.SecurityGroups)
 
 	for loadBalancerPort, listener := range e.Listeners {
 		loadBalancerPortInt, err := strconv.ParseInt(loadBalancerPort, 10, 64)

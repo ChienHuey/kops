@@ -18,6 +18,7 @@ package gcemodel
 
 import (
 	"fmt"
+
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gcetasks"
@@ -27,6 +28,7 @@ import (
 // APILoadBalancerBuilder builds a LoadBalancer for accessing the API
 type APILoadBalancerBuilder struct {
 	*GCEModelContext
+	Lifecycle *fi.Lifecycle
 }
 
 var _ fi.ModelBuilder = &APILoadBalancerBuilder{}
@@ -65,6 +67,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 
 	forwardingRule := &gcetasks.ForwardingRule{
 		Name:       s(b.NameForForwardingRule("api")),
+		Lifecycle:  b.Lifecycle,
 		PortRange:  "443-443",
 		TargetPool: targetPool,
 		IPAddress:  ipAddress,
@@ -88,6 +91,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	{
 		t := &gcetasks.FirewallRule{
 			Name:         s(b.NameForFirewallRule("https-api")),
+			Lifecycle:    b.Lifecycle,
 			Network:      b.LinkToNetwork(),
 			SourceRanges: b.Cluster.Spec.KubernetesAPIAccess,
 			TargetTags:   []string{b.GCETagForRole(kops.InstanceGroupRoleMaster)},

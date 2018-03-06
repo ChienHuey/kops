@@ -19,19 +19,22 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
+	"text/template"
+
 	"github.com/golang/glog"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/model/iam"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awstasks"
-	"reflect"
-	"strings"
-	"text/template"
 )
 
 // IAMModelBuilder configures IAM objects
 type IAMModelBuilder struct {
 	*KopsModelContext
+
+	Lifecycle *fi.Lifecycle
 }
 
 var _ fi.ModelBuilder = &IAMModelBuilder{}
@@ -74,7 +77,9 @@ func (b *IAMModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 
 			iamRole = &awstasks.IAMRole{
-				Name:               s(name),
+				Name:      s(name),
+				Lifecycle: b.Lifecycle,
+
 				RolePolicyDocument: fi.WrapResource(rolePolicy),
 				ExportWithID:       s(strings.ToLower(string(role)) + "s"),
 			}
@@ -83,8 +88,8 @@ func (b *IAMModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 
 		{
-			iamPolicy := &iam.IAMPolicyResource{
-				Builder: &iam.IAMPolicyBuilder{
+			iamPolicy := &iam.PolicyResource{
+				Builder: &iam.PolicyBuilder{
 					Cluster: b.Cluster,
 					Role:    role,
 					Region:  b.Region,
@@ -103,7 +108,9 @@ func (b *IAMModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 
 			t := &awstasks.IAMRolePolicy{
-				Name:           s(name),
+				Name:      s(name),
+				Lifecycle: b.Lifecycle,
+
 				Role:           iamRole,
 				PolicyDocument: iamPolicy,
 			}
@@ -113,14 +120,16 @@ func (b *IAMModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		var iamInstanceProfile *awstasks.IAMInstanceProfile
 		{
 			iamInstanceProfile = &awstasks.IAMInstanceProfile{
-				Name: s(name),
+				Name:      s(name),
+				Lifecycle: b.Lifecycle,
 			}
 			c.AddTask(iamInstanceProfile)
 		}
 
 		{
 			iamInstanceProfileRole := &awstasks.IAMInstanceProfileRole{
-				Name: s(name),
+				Name:      s(name),
+				Lifecycle: b.Lifecycle,
 
 				InstanceProfile: iamInstanceProfile,
 				Role:            iamRole,
@@ -134,23 +143,24 @@ func (b *IAMModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			if b.Cluster.Spec.AdditionalPolicies != nil {
 				roleAsString := reflect.ValueOf(role).String()
 				additionalPolicies := *(b.Cluster.Spec.AdditionalPolicies)
-
 				additionalPolicy = additionalPolicies[strings.ToLower(roleAsString)]
 			}
 
 			additionalPolicyName := "additional." + name
 
 			t := &awstasks.IAMRolePolicy{
-				Name: s(additionalPolicyName),
+				Name:      s(additionalPolicyName),
+				Lifecycle: b.Lifecycle,
+
 				Role: iamRole,
 			}
 
 			if additionalPolicy != "" {
-				p := &iam.IAMPolicy{
-					Version: iam.IAMPolicyDefaultVersion,
+				p := &iam.Policy{
+					Version: iam.PolicyDefaultVersion,
 				}
 
-				statements := make([]*iam.IAMStatement, 0)
+				statements := make([]*iam.Statement, 0)
 				json.Unmarshal([]byte(additionalPolicy), &statements)
 				p.Statement = append(p.Statement, statements...)
 
@@ -179,6 +189,8 @@ func (b *IAMModelBuilder) buildAWSIAMRolePolicy() (fi.Resource, error) {
 			// it is ec2.amazonaws.com everywhere but in cn-north, where it is ec2.amazonaws.com.cn
 			switch b.Region {
 			case "cn-north-1":
+				return "ec2.amazonaws.com.cn"
+			case "cn-northwest-1":
 				return "ec2.amazonaws.com.cn"
 			default:
 				return "ec2.amazonaws.com"

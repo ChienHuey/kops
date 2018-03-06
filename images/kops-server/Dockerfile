@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM alpine:3.5
+FROM k8s.gcr.io/debian-base-amd64:0.3
+# TODO
+# RUN apt-get update && apt-get install --yes --reinstall lsb-base
 COPY /.build/dist/linux/amd64/kops-server /kops-server
 ENTRYPOINT "/kops-server"

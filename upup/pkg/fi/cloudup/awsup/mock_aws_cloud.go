@@ -18,18 +18,22 @@ package awsup
 
 import (
 	"fmt"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling/autoscalingiface"
 	"github.com/aws/aws-sdk-go/service/cloudformation"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/ec2/ec2iface"
-	"github.com/aws/aws-sdk-go/service/elb"
+	"github.com/aws/aws-sdk-go/service/elb/elbiface"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/aws/aws-sdk-go/service/route53/route53iface"
 	"github.com/golang/glog"
+	"k8s.io/api/core/v1"
+	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
+	dnsproviderroute53 "k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/aws/route53"
+	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/cloudinstances"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kubernetes/federation/pkg/dnsprovider"
-	dnsproviderroute53 "k8s.io/kubernetes/federation/pkg/dnsprovider/providers/aws/route53"
 )
 
 type MockAWSCloud struct {
@@ -70,10 +74,23 @@ type MockCloud struct {
 	MockCloudFormation *cloudformation.CloudFormation
 	MockEC2            ec2iface.EC2API
 	MockRoute53        route53iface.Route53API
+	MockELB            elbiface.ELBAPI
 }
 
-func (c *MockCloud) ProviderID() fi.CloudProviderID {
-	return "mock"
+func (c *MockAWSCloud) DeleteGroup(g *cloudinstances.CloudInstanceGroup) error {
+	return deleteGroup(c, g)
+}
+
+func (c *MockAWSCloud) DeleteInstance(i *cloudinstances.CloudInstanceGroupMember) error {
+	return deleteInstance(c, i)
+}
+
+func (c *MockAWSCloud) GetCloudGroups(cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error) {
+	return getCloudGroups(c, cluster, instancegroups, warnUnmatched, nodes)
+}
+
+func (c *MockCloud) ProviderID() kops.CloudProviderID {
+	return kops.CloudProviderAWS
 }
 
 func (c *MockCloud) DNS() (dnsprovider.Interface, error) {
@@ -108,13 +125,20 @@ func (c *MockAWSCloud) AddAWSTags(id string, expected map[string]string) error {
 	return addAWSTags(c, id, expected)
 }
 
+func (c *MockAWSCloud) DeleteTags(id string, tags map[string]string) error {
+	return deleteTags(c, id, tags)
+}
+
 func (c *MockAWSCloud) BuildTags(name *string) map[string]string {
 	return buildTags(c.tags, name)
 }
 
 func (c *MockAWSCloud) Tags() map[string]string {
-	glog.Fatalf("MockAWSCloud Tags not implemented")
-	return nil
+	tags := make(map[string]string)
+	for k, v := range c.tags {
+		tags[k] = v
+	}
+	return tags
 }
 
 func (c *MockAWSCloud) CreateTags(resourceId string, tags map[string]string) error {
@@ -138,7 +162,7 @@ func (c *MockAWSCloud) DescribeInstance(instanceID string) (*ec2.Instance, error
 }
 
 func (c *MockAWSCloud) DescribeVPC(vpcID string) (*ec2.Vpc, error) {
-	return nil, fmt.Errorf("MockAWSCloud DescribeVPC not implemented")
+	return describeVPC(c, vpcID)
 }
 
 func (c *MockAWSCloud) ResolveImage(name string) (*ec2.Image, error) {
@@ -171,9 +195,11 @@ func (c *MockAWSCloud) IAM() *iam.IAM {
 	return nil
 }
 
-func (c *MockAWSCloud) ELB() *elb.ELB {
-	glog.Fatalf("MockAWSCloud ELB not implemented")
-	return nil
+func (c *MockAWSCloud) ELB() elbiface.ELBAPI {
+	if c.MockELB == nil {
+		glog.Fatalf("MockAWSCloud MockELB not set")
+	}
+	return c.MockELB
 }
 
 func (c *MockAWSCloud) Autoscaling() autoscalingiface.AutoScalingAPI {
@@ -191,5 +217,19 @@ func (c *MockAWSCloud) Route53() route53iface.Route53API {
 }
 
 func (c *MockAWSCloud) FindVPCInfo(id string) (*fi.VPCInfo, error) {
-	return nil, fmt.Errorf("MockAWSCloud FindVPCInfo not implemented")
+	return findVPCInfo(c, id)
+}
+
+// DefaultInstanceType determines an instance type for the specified cluster & instance group
+func (c *MockAWSCloud) DefaultInstanceType(cluster *kops.Cluster, ig *kops.InstanceGroup) (string, error) {
+	switch ig.Spec.Role {
+	case kops.InstanceGroupRoleMaster:
+		return "m3.medium", nil
+	case kops.InstanceGroupRoleNode:
+		return "t2.medium", nil
+	case kops.InstanceGroupRoleBastion:
+		return "t2.micro", nil
+	default:
+		return "", fmt.Errorf("MockAWSCloud DefaultInstanceType does not handle %s", ig.Spec.Role)
+	}
 }

@@ -31,7 +31,9 @@ import (
 
 //go:generate fitask -type=Subnet
 type Subnet struct {
-	Name             *string
+	Name      *string
+	Lifecycle *fi.Lifecycle
+
 	ID               *string
 	VPC              *VPC
 	AvailabilityZone *string
@@ -78,6 +80,10 @@ func (e *Subnet) Find(c *fi.Context) (*Subnet, error) {
 
 	glog.V(2).Infof("found matching subnet %q", *actual.ID)
 	e.ID = actual.ID
+
+	// Prevent spurious changes
+	actual.Lifecycle = e.Lifecycle // Lifecycle is not materialized in AWS
+	actual.Name = e.Name           // Name is part of Tags
 
 	return actual, nil
 }
@@ -154,8 +160,6 @@ func (_ *Subnet) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Subnet) error {
 		if a == nil {
 			return fmt.Errorf("Subnet with id %q not found", fi.StringValue(e.ID))
 		}
-
-		return nil
 	}
 
 	if a == nil {
@@ -205,6 +209,11 @@ func (_ *Subnet) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *Su
 	shared := fi.BoolValue(e.Shared)
 	if shared {
 		// Not terraform owned / managed
+		// We won't apply changes, but our validation (kops update) will still warn
+		//
+		// We probably shouldn't output subnet_ids only in this case - we normally output them by role,
+		// but removing it now might break people.  We could always output subnet_ids though, if we
+		// ever get a request for that.
 		return t.AddOutputVariableArray("subnet_ids", terraform.LiteralFromStringValue(*e.ID))
 	}
 
@@ -243,6 +252,7 @@ func (_ *Subnet) RenderCloudformation(t *cloudformation.CloudformationTarget, a,
 	shared := fi.BoolValue(e.Shared)
 	if shared {
 		// Not cloudformation owned / managed
+		// We won't apply changes, but our validation (kops update) will still warn
 		return nil
 	}
 

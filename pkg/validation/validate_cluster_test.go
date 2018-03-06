@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"testing"
 
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/pkg/api/v1"
 )
 
 func Test_ValidateClusterPositive(t *testing.T) {
@@ -318,18 +318,18 @@ func dummyNode(nodeMap map[string]string) v1.Node {
 				v1.ResourceNvidiaGPU: *resource.NewQuantity(0, resource.DecimalSI),
 			},
 			Addresses: []v1.NodeAddress{
-				{Type: v1.NodeLegacyHostIP, Address: "127.0.0.1"},
+				{Type: v1.NodeAddressType("LegacyHostIP"), Address: "127.0.0.1"},
 				{Type: v1.NodeInternalIP, Address: "127.0.0.1"},
 				{Type: v1.NodeHostName, Address: nodeMap["name"]},
 			},
 			// images will be sorted from max to min in node status.
 			Images: []v1.ContainerImage{
 				{
-					Names:     []string{"gcr.io/google_containers:v3", "gcr.io/google_containers:v4"},
+					Names:     []string{"k8s.gcr.io:v3", "k8s.gcr.io:v4"},
 					SizeBytes: 456,
 				},
 				{
-					Names:     []string{"gcr.io/google_containers:v1", "gcr.io/google_containers:v2"},
+					Names:     []string{"k8s.gcr.io:v1", "k8s.gcr.io:v2"},
 					SizeBytes: 123,
 				},
 			},
