@@ -647,7 +647,7 @@ var MachineTypes []AWSMachineTypeInfo = []AWSMachineTypeInfo{
 		MemoryGB:       3904,
 		ECU:            340,
 		Cores:          128,
-		EphemeralDisks: []int{3904},
+		EphemeralDisks: []int{1920,1920},
 	},
 
 	// x1 family
